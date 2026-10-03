@@ -1,0 +1,46 @@
+name: test-data
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - run: |
+          python - <<'EOF'
+          import requests
+          H = {"User-Agent": "Mozilla/5.0 (compatible; RadarTest/1.0)"}
+
+          def check(name, method, url, **kw):
+              try:
+                  r = requests.request(method, url, headers=H, timeout=20, **kw)
+                  note = ""
+                  try:
+                      j = r.json()
+                      if isinstance(j, dict) and "data" in j:
+                          d = j["data"]
+                          note = f"code={j.get('code')} data={len(d) if hasattr(d, '__len__') else d}"
+                          if isinstance(d, list) and d:
+                              note += f" contoh={list(d[0].keys())[:8]}"
+                          if str(j.get('code')) not in ("0", "None"):
+                              note += f" pesan={str(j.get('msg'))[:80]}"
+                      elif isinstance(j, list):
+                          note = f"{len(j[0].get('universe', []))} koin"
+                      else:
+                          note = str(j)[:150]
+                  except Exception:
+                      note = r.text[:150].replace("\n", " ")
+                  print(f"[{name}] HTTP {r.status_code} | {note}")
+              except Exception as e:
+                  print(f"[{name}] GAGAL {type(e).__name__}")
+
+          check("OKX open interest", "GET", "https://www.okx.com/api/v5/public/open-interest?instType=SWAP")
+          check("OKX harga dan volume", "GET", "https://www.okx.com/api/v5/market/tickers?instType=SWAP")
+          check("OKX likuidasi", "GET", "https://www.okx.com/api/v5/public/liquidation-orders?instType=SWAP&state=filled&uly=BTC-USDT")
+          check("Hyperliquid", "POST", "https://api.hyperliquid.xyz/info", json={"type": "metaAndAssetCtxs"})
+          check("Bybit OI 5 menit", "GET", "https://api.bybit.com/v5/market/open-interest?category=linear&symbol=BTCUSDT&intervalTime=5min&limit=3")
+          check("Binance OI", "GET", "https://fapi.binance.com/fapi/v1/openInterest?symbol=BTCUSDT")
+          EOF
