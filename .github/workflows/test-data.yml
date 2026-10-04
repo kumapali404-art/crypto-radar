@@ -13,34 +13,25 @@ jobs:
           python - <<'EOF'
           import requests
           H = {"User-Agent": "Mozilla/5.0 (compatible; RadarTest/1.0)"}
+          B = "https://www.okx.com/api/v5/"
 
-          def check(name, method, url, **kw):
+          def check(name, path, show=0):
               try:
-                  r = requests.request(method, url, headers=H, timeout=20, **kw)
-                  note = ""
-                  try:
-                      j = r.json()
-                      if isinstance(j, dict) and "data" in j:
-                          d = j["data"]
-                          note = f"code={j.get('code')} data={len(d) if hasattr(d, '__len__') else d}"
-                          if isinstance(d, list) and d:
-                              note += f" contoh={list(d[0].keys())[:8]}"
-                          if str(j.get('code')) not in ("0", "None"):
-                              note += f" pesan={str(j.get('msg'))[:80]}"
-                      elif isinstance(j, list):
-                          note = f"{len(j[0].get('universe', []))} koin"
-                      else:
-                          note = str(j)[:150]
-                  except Exception:
-                      note = r.text[:150].replace("\n", " ")
-                  print(f"[{name}] HTTP {r.status_code} | {note}")
+                  r = requests.get(B + path, headers=H, timeout=20)
+                  j = r.json()
+                  d = j.get("data", [])
+                  print(f"[{name}] HTTP {r.status_code} code={j.get('code')} baris={len(d)} {str(j.get('msg'))[:50]}")
+                  for row in d[:show]:
+                      print("    ", row)
               except Exception as e:
                   print(f"[{name}] GAGAL {type(e).__name__}")
 
-          check("OKX open interest", "GET", "https://www.okx.com/api/v5/public/open-interest?instType=SWAP")
-          check("OKX harga dan volume", "GET", "https://www.okx.com/api/v5/market/tickers?instType=SWAP")
-          check("OKX likuidasi", "GET", "https://www.okx.com/api/v5/public/liquidation-orders?instType=SWAP&state=filled&uly=BTC-USDT")
-          check("Hyperliquid", "POST", "https://api.hyperliquid.xyz/info", json={"type": "metaAndAssetCtxs"})
-          check("Bybit OI 5 menit", "GET", "https://api.bybit.com/v5/market/open-interest?category=linear&symbol=BTCUSDT&intervalTime=5min&limit=3")
-          check("Binance OI", "GET", "https://fapi.binance.com/fapi/v1/openInterest?symbol=BTCUSDT")
+          for bar in ["5m", "15m", "30m", "1H", "4H", "1Dutc", "1Mutc"]:
+              check("candle BTC " + bar, f"market/candles?instId=BTC-USDT-SWAP&bar={bar}&limit=300")
+          check("candle 10 Okt 2025 BTC", "market/history-candles?instId=BTC-USDT-SWAP&bar=1Dutc&after=1760140800000&limit=2", show=2)
+          check("candle 10 Okt 2025 SOL", "market/history-candles?instId=SOL-USDT-SWAP&bar=1Dutc&after=1760140800000&limit=2", show=2)
+          check("OI+volume BTC 5m", "rubik/stat/contracts/open-interest-volume?ccy=BTC&period=5m", show=2)
+          check("OI+volume BTC 1H", "rubik/stat/contracts/open-interest-volume?ccy=BTC&period=1H", show=2)
+          check("order book BTC", "market/books?instId=BTC-USDT-SWAP&sz=20")
+          check("likuidasi ETH", "public/liquidation-orders?instType=SWAP&state=filled&uly=ETH-USDT")
           EOF
