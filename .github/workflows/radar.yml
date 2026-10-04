@@ -1,0 +1,41 @@
+name: radar
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      min_grade:
+        description: "Peringkat minimum yang dikirim (A+, A, B+, B)"
+        default: "A"
+concurrency:
+  group: radar
+  cancel-in-progress: false
+permissions:
+  contents: write
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python radar.py
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          MIN_GRADE: ${{ github.event.inputs.min_grade || 'A' }}
+      - name: Simpan papan skor
+        run: |
+          git config user.name "radar-bot"
+          git config user.email "radar-bot@users.noreply.github.com"
+          git add data/signals.csv || true
+          if ! git diff --cached --quiet; then
+            git commit -m "update signals"
+            git pull --rebase
+            git push
+          fi
