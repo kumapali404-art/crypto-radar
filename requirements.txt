@@ -1,9 +1,4 @@
+numpy
 requests
 feedparser
-yfinance
-python-dotenv
-tzdata
 matplotlib
-pandas
-numpy
-trafilatura
