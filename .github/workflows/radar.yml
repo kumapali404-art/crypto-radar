@@ -1,27 +1,14 @@
-name: radar
+name: macro-wire
 on:
   schedule:
-    - cron: "7,37 * * * *"
+    - cron: "*/30 * * * *"
   workflow_dispatch:
-    inputs:
-      min_grade:
-        description: "Peringkat minimum yang dikirim (A+, A, B+, B)"
-        default: "A"
-      force:
-        description: "ya = abaikan penjaga slot (tes manual), tidak = satu laporan per slot"
-        default: "ya"
-      interval:
-        description: "Selang laporan dalam menit (30 atau 60)"
-        default: "30"
 concurrency:
-  group: radar
-  cancel-in-progress: false
-permissions:
-  contents: write
+  group: macro-wire
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -29,21 +16,19 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
-      - run: python radar.py
+      - uses: actions/cache/restore@v4
+        with:
+          path: seen.db
+          key: seen-${{ github.run_id }}
+          restore-keys: seen-
+      - run: python bot.py --once
         env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          MIN_GRADE: ${{ github.event.inputs.min_grade || 'A' }}
-          FORCE: ${{ github.event.inputs.force || 'tidak' }}
-          INTERVAL_MIN: ${{ github.event.inputs.interval || '30' }}
-      - name: Simpan papan skor
-        run: |
-          git config user.name "radar-bot"
-          git config user.email "radar-bot@users.noreply.github.com"
-          git add data/signals.csv data/last_slot.txt || true
-          if ! git diff --cached --quiet; then
-            git commit -m "update signals"
-            git pull --rebase
-            git push
-          fi
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+      - if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: seen.db
+          key: seen-${{ github.run_id }}
