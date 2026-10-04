@@ -208,7 +208,7 @@ def pooled_h4(all4h):
         for i in range(2, len(a) - 1):
             if col[i] != 0 and col[i] == col[i - 1] == col[i - 2]:
                 g = col[i] * (c[i + 1] / o[i + 1] - 1); ev.append((a[i, 0], g - 2 * FEE, g > 0))
-    return summarize(ev, "H4: 3 candle searah -> 1 candle berikutnya searah")
+    return summarize(ev, "H4 3 candle searah -> candle berikut searah")
 
 def pooled_oi(items):
     ev = []
@@ -220,14 +220,15 @@ def pooled_oi(items):
         for i in range(3, len(ts) - 6):
             if z[i - 3] > 1.5 and px[i] > px[i - 3]:
                 g = px[i + 6] / px[i] - 1; ev.append((ts[i], g - 2 * FEE, g > 0))
-    return summarize(ev, "5m: OI naik tajam (z>1.5) + harga naik -> 30 menit berikutnya naik")
+    return summarize(ev, "OI naik tajam + harga naik -> 30 menit berikut")
 
 def summarize(ev, name):
     if len(ev) < 30: return f"{name}: sampel {len(ev)} (<30), belum bisa disimpulkan"
-    ev.sort(); net = np.array([e[1] for e in ev]); k = sum(e[2] for e in ev); lo, hi = wilson(k, len(ev))
+    ev.sort(); net = np.array([e[1] for e in ev]); k = sum(e[2] for e in ev); t = tstat(net)
     cut = int(len(ev) * .7); is_, oos = net[:cut], net[cut:]
-    return (f"{name}: n={len(ev)}, hit {100*k/len(ev):.0f}% (CI {100*lo:.0f}-{100*hi:.0f}%), rata-rata bersih {100*net.mean():+.3f}%, t={tstat(net):+.1f}; "
-            f"in-sample {100*is_.mean():+.3f}% vs out-of-sample {100*oos.mean():+.3f}% (peristiwa tumpang-tindih, CI terlalu optimis)")
+    v = "tidak ada keunggulan terukur" if abs(t) < 2 else "keunggulan POSITIF" if t > 0 else "cenderung MERUGI"
+    return (f"{name}: n={len(ev)}, hit {100*k/len(ev):.0f}%, bersih {100*net.mean():+.3f}%/trade, t={t:+.1f} -> {v}. "
+            f"Awal {100*is_.mean():+.3f}% / akhir {100*oos.mean():+.3f}%")
 
 # ---------------- analisis per koin ----------------
 def last(x):
@@ -263,9 +264,11 @@ def analyze(d, tk, oiusd, btc):
     if dr:
         lvl = r["sup"] if dr > 0 else r["res"]; r["touch"] = touches(a1, lvl, at1) if lvl else 0
         stop = 1.5 * at1; tgt_lvl = r["res"] if dr > 0 else r["sup"]
-        td = abs(tgt_lvl - px) if tgt_lvl and abs(tgt_lvl - px) >= at1 else 3 * at1
-        td = min(td, 6 * at1)   # batasi target agar RR tidak menggelembung
+        td = abs(tgt_lvl - px) if tgt_lvl else 3 * at1      # target = level lawan terdekat (jujur: bukan melompati penghalang)
+        td = min(td, 6 * at1)
+        r["blocked"] = bool(tgt_lvl and abs(tgt_lvl - px) < at1)   # penghalang < 1 ATR
         r["stop"] = px - dr * stop; r["tgt"] = px + dr * td; r["rr"] = td / stop
+    r["quad"] = quadrant(p15, r["oi15"])
     return r
 
 def score(r, now):
@@ -289,6 +292,10 @@ def score(r, now):
     if sp is None or sp > MAX_SPREAD_BPS:
         if GR[g] > 2: g = "B+"
         why.append("spread lebar/tidak ada data")
+    if r.get("blocked"):
+        why.append("dekat " + ("resisten" if dr > 0 else "support"))
+        if GR[g] > 2: g = "B+"
+    if r["oiz"] > 3 and r["p15"] * dr > 0: why.append("OI melonjak: rawan kejar harga")
     for t in NEWS_BLACKOUT_UTC:
         try:
             tt = datetime.strptime(t, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
@@ -302,7 +309,7 @@ def read_signals():
     with open(SIGNALS_CSV) as f: return list(csv.DictReader(f))
 
 def write_signals(rows):
-    os.makedirs("data", exist_ok=True); cols = ["ts", "sym", "dir", "grade", "score", "entry", "ret1h", "ret4h", "ret24h"]
+    os.makedirs("data", exist_ok=True); cols = ["ts", "sym", "dir", "grade", "score", "entry", "rr", "oiz", "touch", "ret1h", "ret4h", "ret24h"]
     with open(SIGNALS_CSV, "w", newline="") as f:
         w = csv.DictWriter(f, cols); w.writeheader(); [w.writerow({c: r.get(c, "") for c in cols}) for r in rows]
 
@@ -349,7 +356,7 @@ def gemini(payload):
                               headers={"x-goog-api-key": key, "Content-Type": "application/json"},
                               json={"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"temperature": .3, "maxOutputTokens": 4000, "responseMimeType": "application/json"}}, timeout=90)
             log(f"Gemini {m}: {r.status_code}")
-            if r.status_code != 200: continue
+            if r.status_code != 200: log("  " + r.text[:140].replace("\n", " ")); continue
             t = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
             return json.loads(re.sub(r"^```json|```$", "", t.strip()).strip())
         except Exception as e: log(f"Gemini {m} gagal ({type(e).__name__})")
@@ -382,30 +389,41 @@ def send_text(t):
     if chunk.strip(): tg("sendMessage", text=chunk.strip(), disable_web_page_preview="true")
 
 ARW = {1: "↑", -1: "↓", 0: "→"}
+def pf_(x):
+    if x is None or (isinstance(x, float) and np.isnan(x)): return "-"
+    a = abs(x)
+    return f"{x:,.0f}" if a >= 1000 else f"{x:,.2f}" if a >= 10 else f"{x:,.3f}" if a >= 1 else f"{x:.4g}"
+def quadrant(p, o):
+    return ("long baru masuk" if o > 0 else "short covering") if p > 0 else ("short baru masuk" if o > 0 else "long menyerah")
 def fmt(r, ai, news):
-    tf = " ".join(f"{k.replace('Dutc','D')}{ARW[v]}" for k, v in r["S"].items()); st = []
-    if r["brk"]: st.append("breakout+retest 15m")
-    if r["wick"]: st.append("wick penolakan")
-    if r["str1h"]: st.append("struktur 1H " + ("HH/HL" if r["str1h"] > 0 else "LH/LL"))
-    if r["fvg"]: st.append(f"FVG {r['fvg'][0]}")
-    pf = r["perf"]; t = [f"🏷 {r['grade']} {r['sym']} {'LONG' if r['dir']>0 else 'SHORT'}  skor {r['score']:.0f}/100" + (f"  ⚠ {', '.join(r['why'])}" if r["why"] else ""),
-        f"Harga ${r['px']:,.4g} | 24j {r['chg24']*100:+.1f}% (residual vs BTC {r['resid24']*100:+.1f}%) | OI ${r['oiusd']/1e6:,.0f}M (15m {r['oi15']*100:+.2f}%, z={r['oiz']:+.1f})",
-        f"Volume 15m z={r['volz']:+.1f} | funding {(r['fund'] or 0)*100:+.4f}% (z={r['fz']:+.1f}) | likuidasi 1j long/short {r['liq'][0]:.0f}/{r['liq'][1]:.0f}",
-        f"Top-down: {tf} | selaras {100*sum(TFW[b] for b in TFW if r['S'][b]==r['dir']):.0f}%",
-        f"Struktur: {', '.join(st) or '-'} | RSI8 15m {r['rsi']:.0f}, StochK {r['K']:.0f}/D {r['D']:.0f} (hanya timing)"]
-    z = []
-    if r["sup"]: z.append(f"support {r['sup']:,.4g}")
-    if r["res"]: z.append(f"resisten {r['res']:,.4g}")
-    z.append(f"sentuhan zona {r.get('touch',0)}x")
-    if r["oct10_dist"] is not None: z.append(f"low 10 Okt 2025 {r['oct10']:,.4g} (jarak {r['oct10_dist']:+.1f}%)")
-    t.append("Zona: " + " | ".join(z))
-    t.append(f"Risiko: ATR1H {r['atr_pct']:.2f}% | stop {r['stop']:,.4g} | target {r['tgt']:,.4g} | RR {r['rr']:.1f} | beta {r['beta']:.2f}, korelasi {r['rho']:.2f}"
-             + (f" | Sharpe90d {pf['sharpe']:.1f}, Sortino {pf['sortino']:.1f}, MaxDD {pf['maxdd']*100:.0f}%" if pf else ""))
-    t.append("Skor: " + ", ".join(f"{k} {v:.0f}" for k, v in r["sc"].items()))
+    dr = r["dir"]; al = [k.replace("Dutc", "D") for k, v in r["S"].items() if v == dr]
+    ok = [f"tren {len(al)}/5 TF searah ({'/'.join(al)})"]
+    if r["brk"] == dr: ok.append("breakout+retest 15m")
+    if r["wick"] == dr: ok.append("wick penolakan")
+    if r["str1h"] == dr: ok.append("struktur 1H searah")
+    if r["h4streak"] == dr: ok.append("3 candle H4 searah")
+    warn = list(r["why"])
+    if r["fvg"] and (r["fvg"][0] == "bull") != (dr > 0): warn.append("FVG berlawanan")
+    if r["volz"] < .5: warn.append("volume sepi")
+    if r["fz"] * dr > 1.5: warn.append("funding ramai searah")
+    if r["rr"] < 1.5: warn.append(f"RR rendah ({r['rr']:.1f})")
+    pf = r["perf"]
+    t = [f"{'🟢 LONG' if dr > 0 else '🔴 SHORT'} {r['sym']} · {r['grade']} · skor {r['score']:.0f}",
+         f"Harga {pf_(r['px'])} | Stop {pf_(r['stop'])} | Target {pf_(r['tgt'])} | RR {r['rr']:.1f}",
+         "✔ " + "; ".join(ok),
+         "⚠ " + ("; ".join(warn) if warn else "tidak ada peringatan khusus"),
+         f"Data: {r['quad']} (OI 15m {r['oi15']*100:+.2f}%, z {r['oiz']:+.1f}) · volume z {r['volz']:+.1f} · funding {(r['fund'] or 0)*100:+.4f}% (z {r['fz']:+.1f}) · RSI8 {r['rsi']:.0f}, Stoch {r['K']:.0f}/{r['D']:.0f}",
+         f"Zona: support {pf_(r['sup'])} / resisten {pf_(r['res'])} · sentuhan {r.get('touch', 0)}x"
+         + (f" · low 10 Okt 2025 {pf_(r['oct10'])} ({r['oct10_dist']:+.0f}%)" if r["oct10_dist"] is not None else ""),
+         f"Risiko: ATR1H {r['atr_pct']:.2f}% · beta {r['beta']:.2f} · 24j {r['chg24']*100:+.1f}% (residual {r['resid24']*100:+.1f}%)"
+         + (f" · Sharpe90d {pf['sharpe']:.1f}, MaxDD {pf['maxdd']*100:.0f}%" if pf else "")]
+    lab = {}
     if ai:
-        t += [f"✅ Kasus bullish: {ai.get('bull_case','')}", f"❌ Kasus bearish: {ai.get('bear_case','')}", f"Plan A: {ai.get('plan_a','')}", f"Plan B: {ai.get('plan_b','')}", f"Plan C: {ai.get('plan_c','')}"]
+        t += [f"✅ Bull: {ai.get('bull_case', '')}", f"❌ Bear: {ai.get('bear_case', '')}",
+              f"A: {ai.get('plan_a', '')}", f"B: {ai.get('plan_b', '')}", f"C (batal): {ai.get('plan_c', '')}"]
         lab = {n.get("i"): n.get("label", "netral") for n in ai.get("news", [])}
-        for i, (ti, li) in enumerate(news[:6]): t.append(f"{ {'bullish':'🟢','bearish':'🔴'}.get(lab.get(i),'⚪') } {ti}\n{li}")
+    for i, (ti, li) in enumerate(news[:4]):
+        t.append(f"{ {'bullish': '🟢', 'bearish': '🔴'}.get(lab.get(i), '⚪') } {ti}\n{li}")
     return "\n".join(t)
 
 # ---------------- main ----------------
@@ -431,13 +449,13 @@ def main():
             if r and r["dir"]:
                 r["score"], r["grade"], r["sc"], r["why"] = score(r, now); res.append(r)
         except Exception as e: log(f"analisis {d['sym']} gagal: {type(e).__name__} {e}")
-    log(f"Dianalisis {len(raw)}, punya arah {len(res)}")
+    log(f"Dianalisis {len(raw)}, punya arah {len(res)} | sebaran: " + ", ".join(f"{g}={sum(1 for r in res if r['grade']==g)}" for g in GR))
     # rotasi modal (elevator) + rezim BTC
-    tiers = {"Big": [], "Mid": [], "Small": []}
+    tiers = {"BTC/ETH": [], "Alt besar": [], "Alt lain": []}
     for i in ranked:
         c = float(tk[i]["last"]) / float(tk[i]["open24h"]) - 1; s = i.split("-")[0]
-        tiers["Big" if s in ("BTC", "ETH") else "Mid" if oi[i] >= 150e6 else "Small"].append(c)
-    rot = " | ".join(f"{k} {100*np.median(v):+.1f}% (n={len(v)})" for k, v in tiers.items() if v)
+        tiers["BTC/ETH" if s in ("BTC", "ETH") else "Alt besar" if oi[i] >= 150e6 else "Alt lain"].append(c)
+    rot = " · ".join(f"{k} {100*np.median(v):+.1f}%" for k, v in tiers.items() if v)
     reg = ""
     if "BTC" in D:
         b1 = cl(D["BTC"]["c"]["1H"]); reg = "BTC: " + " ".join(f"{k.replace('Dutc','D')}{ARW[tf_trend(cl(D['BTC']['c'][k]))]}" for k in ("1Dutc", "4H", "1H", "15m"))
@@ -445,7 +463,7 @@ def main():
     cand = sorted([r for r in res if GR[r["grade"]] >= GR[MIN_GRADE]], key=lambda r: -r["score"])
     recent = {(x["sym"], x["dir"]) for x in rows if time.time() * 1000 - int(x["ts"]) < COOLDOWN_H * 3600_000}
     cand = [r for r in cand if (r["sym"], str(r["dir"])) not in recent][:MAX_ALERTS]
-    for r in cand: rows.append({"ts": int(time.time() * 1000), "sym": r["sym"], "dir": r["dir"], "grade": r["grade"], "score": f"{r['score']:.0f}", "entry": r["px"]})
+    for r in cand: rows.append({"ts": int(time.time() * 1000), "sym": r["sym"], "dir": r["dir"], "grade": r["grade"], "score": f"{r['score']:.0f}", "entry": r["px"], "rr": f"{r['rr']:.2f}", "oiz": f"{r['oiz']:.1f}", "touch": r.get("touch", 0)})
     write_signals(rows[-2000:])
     if not cand: log("Tidak ada setup yang layak sekarang (sesuai aturan: sedikit sinyal)."); return
     news = {r["sym"]: headlines(r["sym"]) for r in cand}
@@ -455,10 +473,10 @@ def main():
                 "rr": round(r["rr"], 1), "sentuhan_zona": r.get("touch", 0), "low_10okt2025": r["oct10"], "peringatan": r["why"],
                 "headline": [{"i": i, "judul": t} for i, (t, _) in enumerate(news[r["sym"]])]} for r in cand]
     ai = gemini(payload); aim = {c.get("sym"): c for c in (ai or {}).get("coins", [])}
-    head = [f"📡 CRYPTO RADAR  {now:%d %b %H:%M} UTC", f"Rotasi 24j: {rot}", reg]
+    head = [f"📡 RADAR {(now + timedelta(hours=7)):%d %b %H:%M} WIB", f"{reg} · rotasi 24j: {rot}"]
     stats = [pooled_h4([cl(d["c"]["4H"]) for d in raw]), pooled_oi([(cl(d["c"]["5m"]), d["oi5"]) for d in raw if len(d["oi5"])])]
     body = ["\n".join(head)] + [fmt(r, aim.get(r["sym"]), news[r["sym"]]) for r in cand]
-    foot = ["📊 Statistik historis (pooled):"] + stats + ["🧾 Papan skor sinyal radar (maju, bersih biaya):"] + scoreboard(rows) + ["Keputusan tetap di tanganmu. Ini bukan saran finansial."]
+    foot = ["📊 Uji historis (biaya 0.1% sudah dipotong):"] + stats + ["🧾 Papan skor radar:"] + scoreboard(rows) + ["Keputusan di tanganmu. Bukan saran finansial."]
     d0 = D[cand[0]["sym"]]; img = "/tmp/radar.png"
     try:
         chart(cand[0], d0, img)
