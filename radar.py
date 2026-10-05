@@ -27,8 +27,7 @@ NEWS_BLACKOUT_UTC = []                                 # mis. ["2026-10-09 12:30
 BLACKOUT_MIN = 45
 OCT10_TS = 1760054400000
 MODELS = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-flash-latest"]
-NARASI = {
-    "DeFi/DEX": ["UNI", "AAVE", "LDO", "CRV", "MKR", "SNX", "COMP", "PENDLE", "ENA", "JUP", "DYDX", "GMX", "CAKE", "SUSHI"],
+NARASI = {"DeFi/DEX": ["UNI", "AAVE", "LDO", "CRV", "MKR", "SNX", "COMP", "PENDLE", "ENA", "JUP", "DYDX", "GMX", "CAKE", "SUSHI"],
     "AI": ["TAO", "FET", "RENDER", "VVV", "VIRTUAL", "AI16Z", "ARKM", "WLD", "GRT", "AIXBT", "KAITO"],
     "Meme/Launchpad": ["DOGE", "SHIB", "PEPE", "WIF", "BONK", "PUMP", "FARTCOIN", "TRUMP", "POPCAT", "PNUT", "FLOKI", "BOME", "BRETT"],
     "Layer-1/2": ["SOL", "AVAX", "SUI", "APT", "SEI", "TON", "NEAR", "ADA", "DOT", "ATOM", "ARB", "OP", "STRK", "POL", "MNT", "TIA", "INJ"],
