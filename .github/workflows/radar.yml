@@ -1,18 +1,18 @@
 name: radar
 on:
   schedule:
-    - cron: "7,37 * * * *"
+    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
     inputs:
       min_grade:
         description: "Peringkat minimum yang dikirim (A+, A, B+, B)"
-        default: "A"
+        default: "B+"
       force:
         description: "ya = abaikan penjaga slot (tes manual), tidak = satu laporan per slot"
         default: "ya"
       interval:
-        description: "Selang laporan dalam menit (30 atau 60)"
-        default: "30"
+        description: "Selang laporan dalam menit (15 atau 30), samakan dengan cron"
+        default: "15"
 concurrency:
   group: radar
   cancel-in-progress: false
@@ -34,14 +34,16 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          MIN_GRADE: ${{ github.event.inputs.min_grade || 'A' }}
+          MIN_GRADE: ${{ github.event.inputs.min_grade || 'B+' }}
           FORCE: ${{ github.event.inputs.force || 'tidak' }}
-          INTERVAL_MIN: ${{ github.event.inputs.interval || '30' }}
+          INTERVAL_MIN: ${{ github.event.inputs.interval || '15' }}
+          ACCOUNT_USD: "1000"
+          RISK_PCT: "0.5"
       - name: Simpan papan skor
         run: |
           git config user.name "radar-bot"
           git config user.email "radar-bot@users.noreply.github.com"
-          git add data/signals.csv data/last_slot.txt || true
+          git add data/ || true
           if ! git diff --cached --quiet; then
             git commit -m "update signals"
             git pull --rebase
